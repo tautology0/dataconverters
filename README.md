@@ -17,7 +17,7 @@ To use:
 # iwordreader
 Converts BBC Micro Interword files to a sort of XMLy format.
 
-Due to the way Interword works, there may be multiple <strong> or <em> tags in strange places.
+Due to the way Interword works, there may be multiple \<strong\> or \<em\> tags in strange places.
 
 To use:
 
