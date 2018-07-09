@@ -498,6 +498,7 @@ void read_objects(FILE *infile, FILE *outfile, int length)
             case OBJECT_GROUP:
                read_group_object(infile, outfile, object);
                break;
+            case OBJECT_SPRITE:
             case OBJECT_TRANSSPRITE:
                read_sprite_object(infile, outfile, object);
                break;
