@@ -94,6 +94,55 @@ typedef struct
    pathstyletype style;
 } pathheader;
 
+typedef struct
+{
+   unsigned int a;
+   unsigned int b;
+   unsigned int c;
+   unsigned int d;
+   unsigned int e;
+   unsigned int f;
+} transmatrix;
+
+static void hexdump(const void * memory, size_t bytes)
+{
+   const unsigned char * p, * q;
+   int i;
+   printf("   ");
+   p = memory;
+   while (bytes) 
+   {
+      q = p;
+      printf("%p: ", (void *) p);
+      for (i = 0; i < 16 && bytes; ++i)
+      {
+         printf("%02X ", *p);
+         ++p;
+         --bytes;
+      }
+      bytes += i;
+      while (i < 16)
+      {
+         printf("XX ");
+         ++i;
+      }
+      printf("| ");
+      p = q;
+      for (i = 0; i < 16 && bytes; ++i)
+      {
+         printf("%c", isprint(*p) && !isspace(*p) ? *p : ' ');
+         ++p;
+         --bytes;
+      }
+      while (i < 16)
+      {
+         printf(" ");
+         ++i;
+      }
+      printf(" |\n   ");
+   }
+}
+
 char objectnames[][50] = \
    {  "Font Table", "Text", "Path", "Unknown", "Unknown", "Sprite", \
       "Group", "Tagged", "Unknown", "Text Area", "Text Column", \
@@ -115,6 +164,14 @@ double topt(int in)
    // Convert to px
    out*=1.25;
    return out;
+}
+
+void dumpmatrix(transmatrix matrix)
+{
+   printf("  Transformation Matrix:\n");
+   printf("   %d\t%d\t0\n", matrix.a, matrix.b);
+   printf("   %d\t%d\t0\n", matrix.c, matrix.d);
+   printf("   %d\t%d\t0\n", matrix.e, matrix.f);
 }
 
 char *findfontname(unsigned int style)
@@ -385,6 +442,33 @@ void read_group_object(FILE *infile, FILE *outfile, objectheader object)
    fprintf(outfile,"</g>\n");
 }
 
+void read_sprite_object(FILE *infile, FILE *outfile, objectheader object)
+{
+   transmatrix matrix;
+   unsigned char *buffer;
+   int length=object.length;
+   
+   if (object.type == OBJECT_TRANSSPRITE)
+   {
+      // read matrix
+      length -= sizeof(transmatrix);      
+      fread(&matrix, sizeof(transmatrix), 1, infile);
+      printf("  Transformed Sprite Object:\n");
+      dumpmatrix(matrix);
+   }
+   else
+   {
+      printf("  Sprite Object\n");
+   }
+
+   buffer = malloc(length);
+   // Resulting stuff - just hexdump it for now
+   printf("  Data:\n");
+   fread(buffer, 1, length, infile);
+   hexdump(buffer, length);
+}   
+   
+
 void read_objects(FILE *infile, FILE *outfile, int length)
 {
    int curptr;
@@ -397,7 +481,7 @@ void read_objects(FILE *infile, FILE *outfile, int length)
       curptr=ftell(infile);
       fread(&object, sizeof(objectheader), 1, infile);
       if (feof(infile)) break;
-      if (object.type < 13)
+      if (object.type < 14)
       {
          printf(" Object type: %d %s\n", object.type, objectnames[object.type]);
          switch(object.type)
@@ -413,6 +497,9 @@ void read_objects(FILE *infile, FILE *outfile, int length)
                break;
             case OBJECT_GROUP:
                read_group_object(infile, outfile, object);
+               break;
+            case OBJECT_TRANSSPRITE:
+               read_sprite_object(infile, outfile, object);
                break;
          }
       } else printf("Unknown object type %x, skipping\n", object.type);      
@@ -432,7 +519,6 @@ int main(int argc, char **argv)
    strcpy(outfilename,argv[2]);
    
    infile=fopen(infilename, "rb");
-   outfile=fopen(outfilename, "w");
 
    fread(&header, sizeof(drawheader), 1, infile);
    chrptr=strchr(header.creator,' ');
@@ -440,7 +526,14 @@ int main(int argc, char **argv)
    {
       *chrptr='\0';
    }
-      
+   
+   if (header.magic != 0x77617244)
+   {
+      printf("Wrong magic is this a Draw file?\n");
+      exit(1);
+   }
+   
+   outfile=fopen(outfilename, "w");
    printf("File header for %s\n", infilename);
    printf(" Magic: %x\n", header.magic);
    printf(" Major version: %d\n", header.major);
