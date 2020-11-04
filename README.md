@@ -8,7 +8,9 @@ Converts RISC OS !Draw files to SVG. Currently it won't handle sprites, but gets
 
 Homerton, Trinity and Corpus are converted to sans serif, serif and system. Which should be 98% correct most of the time.
 
-It will be quite verbose when converting, at the moment there's no way to switch this off.
+It will be quite verbose when converting, at the moment there's no way to switch this off other than redirecting it elsewhere.
+
+Recent additions support transformations and sprite. I stole the sprite code from Ian Jeffray (http://ian.jeffray.co.uk/riscos/).
 
 To use:
 

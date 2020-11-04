@@ -1,6 +1,9 @@
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <png.h>
+#include "riscosmodes.h"
+#include "riscoscolpal.h"
 
 #define OBJECT_FONTTABLE   0
 #define OBJECT_TEXT        1
@@ -104,6 +107,19 @@ typedef struct
    unsigned int f;
 } transmatrix;
 
+typedef struct
+{
+   unsigned int nextsprite;
+   unsigned char name[12];
+   unsigned int width;
+   unsigned int height;
+   unsigned int firstbit;
+   unsigned int lastbit;
+   unsigned int image;
+   unsigned int mask;
+   unsigned int mode;
+} spritectrlblock;
+
 static void hexdump(const void * memory, size_t bytes)
 {
    const unsigned char * p, * q;
@@ -172,6 +188,11 @@ void dumpmatrix(transmatrix matrix)
    printf("   %d\t%d\t0\n", matrix.a, matrix.b);
    printf("   %d\t%d\t0\n", matrix.c, matrix.d);
    printf("   %d\t%d\t0\n", matrix.e, matrix.f);
+}
+
+double converttransunits(long unit)
+{
+   return (double) unit / (double) (1<<16);
 }
 
 char *findfontname(unsigned int style)
@@ -442,11 +463,192 @@ void read_group_object(FILE *infile, FILE *outfile, objectheader object)
    fprintf(outfile,"</g>\n");
 }
 
+unsigned int read_sprite(spritectrlblock sprite, unsigned char *buffer, unsigned int length)
+{
+   // Most of this has been stolen from Ian Jeffray 'cos I'm lazy
+   unsigned int width, height, realwidth, mode, reps=1, xf, yf, bpp, ncols=256;
+   unsigned int i, firstbit, lastbit;
+   unsigned char *palette=buffer, *spritebits, *maskbits;
+   unsigned char trans[2]={255,0};
+   png_color cpal[17], *colpal;
+   
+   // convert width to bytes
+   width=(sprite.width + 1) * 4;
+   height=sprite.height + 1;
+   mode=sprite.mode;
+   spritebits=(unsigned char *)buffer;
+   maskbits=(sprite.image==sprite.mask)?NULL:(unsigned char *)buffer+(sprite.mask);
+   firstbit=sprite.firstbit;
+   lastbit=sprite.lastbit;
+   
+   // Check for bad modes
+   if (mode > 44 && mode < 256)
+   {
+      printf("   Cannot convert sprite as it has a custom mode. Skipping\n");
+      return;
+   }
+   bpp=modes[mode].bpp;   
+   if (bpp == 0)
+   {
+      printf("   Mode $d is a non-graphical mode, this is weird.\n", sprite.mode);
+      return;
+   }
+   
+   // Account for bpp 
+   yf=modes[mode].yf;
+   xf=modes[mode].xf;
+   realwidth = width;
+   if (bpp < 8)
+   {
+      realwidth <<= (4 - (bpp == 4)?3:bpp);
+   }
+   realwidth -= (31 - sprite.lastbit)/bpp;
+   realwidth -= sprite.firstbit/bpp;
+   
+   if (yf==2)
+   {
+      reps = 2;
+   }
+
+   // Work out palettes
+   if (bpp < 8)
+   {
+      int row, col, bitmask=(1 << bpp), shift=0, i;
+      unsigned char *tmp, *inm, *ins;
+      tmp = (unsigned char *) malloc(realwidth * height);
+      ncols = (1 << bpp) + 1;
+      
+      colpal = (bpp==4)?colpal16:(bpp==2)?colpal4:colpal2;
+      if (sprite.image > 0x2c)
+      {
+         colpal = cpal;
+         memset(&cpal[0], 0, 17*sizeof(png_color));
+         for(i=0; i<(1<<bpp); i++)
+         {
+            cpal[i+1].red  = palette[1];
+            cpal[i+1].green= palette[2];
+            cpal[i+1].blue = palette[3];
+            palette+=8;
+         }
+      }
+      ins = spritebits;
+      spritebits = tmp;
+      inm = maskbits;
+      for(row=0; row<height; row++)
+      {
+         printf("row: %d\n",row);
+         unsigned char *tmpinm = inm;
+         unsigned char *tmpins = ins;
+         ins += firstbit>>3;
+         inm += firstbit>>3;
+          
+         shift=firstbit & 7;
+
+         for(col=0; col<realwidth; col++)
+         {
+            unsigned char pixel = *ins;
+            unsigned char mask = 255;
+            if (maskbits)
+            {
+               mask = *inm;
+               mask >>= shift;
+               mask &= bitmask;
+            }
+              
+            pixel >>= shift;
+            pixel &= bitmask;
+              
+            *tmp = pixel+1;
+            if (!mask)
+               *tmp = 0;
+              
+            tmp++;
+            shift += bpp;
+              
+            if (shift>7) { ins++; inm++; shift=0; }
+              
+         }
+         ins = tmpins + width;
+         inm = tmpinm + width;
+      }
+      firstbit=0;
+      width=realwidth; 
+   }
+   if (bpp==8)
+   {
+      makeriscos256colpal();
+      // make sure pointers are advances
+      spritebits=(unsigned char *)buffer + sprite.image;
+   }
+
+   // Right, make the PNG - libpng does indeed sucketh
+   png_infop info_ptr;
+   png_structp png_ptr;
+   FILE *pngfile;
+   
+   // Create the output struct
+   png_ptr = png_create_write_struct(PNG_LIBPNG_VER_STRING, (png_voidp) NULL, NULL, NULL);
+   info_ptr = png_create_info_struct(png_ptr);
+   
+   // For now write it to a temporary file
+   char tmpname[256];
+   sprintf(tmpname,"%s.png",sprite.name);
+   pngfile=fopen(tmpname, "wb");
+   png_init_io(png_ptr, pngfile);
+   
+   // compression
+   png_set_compression_level(png_ptr, PNG_COMPRESSION_TYPE_DEFAULT);
+   
+   // Header stuff
+   png_set_IHDR(png_ptr, info_ptr, realwidth, height*reps, 8 /* bpp */, PNG_COLOR_TYPE_PALETTE, PNG_INTERLACE_NONE, PNG_COMPRESSION_TYPE_DEFAULT, PNG_FILTER_TYPE_DEFAULT );
+   
+   // Palette
+   png_set_PLTE(png_ptr, info_ptr,  bpp==8?riscos256colpal:colpal, ncols );
+  
+   // Mask
+   if (maskbits) png_set_tRNS(png_ptr, info_ptr, bpp==8?trans:trans+1, bpp==8?2:1, NULL );
+
+   png_write_info(png_ptr, info_ptr);
+   png_set_packing(png_ptr);
+   for (i=0; i<height; i++)
+   {
+      int j;
+      png_bytep row_pointer = spritebits + (firstbit>>3);
+      spritebits += width;
+       
+      if (maskbits && (bpp>4) )
+      {
+         unsigned char *maskp = maskbits + (firstbit>>3);
+         maskbits += width;
+       
+         for(j=0; j<realwidth; j++)
+         {
+            if (row_pointer[j] == 1)
+               row_pointer[j] = 0;
+              
+            if (maskp[j] == 0)
+               row_pointer[j]=1;
+         }
+      }
+       
+      for(j=0; j<reps; j++)
+      {
+         png_write_row(png_ptr, row_pointer);
+      }
+   }
+ 
+   png_write_end(png_ptr, info_ptr);
+   png_destroy_write_struct(&png_ptr, &info_ptr); 
+   return realwidth;   
+} 
+
 void read_sprite_object(FILE *infile, FILE *outfile, objectheader object)
 {
    transmatrix matrix;
+   spritectrlblock sprite;
    unsigned char *buffer;
    int length=object.length;
+   char transform[256]="";
    
    if (object.type == OBJECT_TRANSSPRITE)
    {
@@ -454,7 +656,14 @@ void read_sprite_object(FILE *infile, FILE *outfile, objectheader object)
       length -= sizeof(transmatrix);      
       fread(&matrix, sizeof(transmatrix), 1, infile);
       printf("  Transformed Sprite Object:\n");
+      strcpy(transform, " transform=\"");
       dumpmatrix(matrix);
+      /*
+      if (matrix.a > 0 || matrix.d > 0)
+      {
+         sprintf(transform, "%s scale(%f %f)", transform, (double) matrix.a/
+         65536, (double) matrix.d/65536);
+      }*/
    }
    else
    {
@@ -462,12 +671,37 @@ void read_sprite_object(FILE *infile, FILE *outfile, objectheader object)
    }
 
    buffer = malloc(length);
-   // Resulting stuff - just hexdump it for now
-   printf("  Data:\n");
-   fread(buffer, 1, length, infile);
-   hexdump(buffer, length);
-}   
+   fread(&sprite, sizeof(spritectrlblock), 1, infile);
    
+   if(object.type == OBJECT_TRANSSPRITE)
+   {
+      // We should be able to directly translate to an SVG matrix here.
+      // Need to mess with the units though.
+      sprintf(transform, "%s matrix(%f %f %f %f %f %f)", transform, converttransunits(matrix.a), converttransunits(matrix.b), converttransunits(matrix.c), converttransunits(matrix.d), topt(matrix.e), topt(master.y - matrix.f)-sprite.height);
+      strcat(transform, "\"");
+   }
+   printf("  Sprite Control Block:\n");
+   // Draw only saves one sprite in each chunk
+
+
+   printf("   Name: %s\n", sprite.name);
+   printf("   Width: %d\n", sprite.width);
+   printf("   Height: %d\n", sprite.height);
+   printf("   First bit: %d\n", sprite.firstbit);
+   printf("   Last bit: %d\n", sprite.lastbit);
+   printf("   Mode: %d\n", sprite.mode);
+   printf("   Image: %x\n", sprite.image);
+   printf("   Mask: %x\n", sprite.mask);
+   printf("   Transformation: %s\n", transform);
+   printf("  Data:\n");
+   length-=sizeof(spritectrlblock);
+   
+   fread(buffer, 1, length, infile);
+   sprite.width=read_sprite(sprite, buffer, length);
+   fprintf(outfile, "<image xlink:href=\"%s.png\" height=\"%d\" width=\"%d\" %s/>\n",
+      sprite.name, sprite.height, sprite.width, transform);
+   //hexdump(buffer, length);
+}
 
 void read_objects(FILE *infile, FILE *outfile, int length)
 {
@@ -515,10 +749,10 @@ int main(int argc, char **argv)
    drawheader header;
    FILE *infile, *outfile;
    unsigned char *chrptr;
+   int i;
   
    strcpy(infilename,argv[1]);
-   strcpy(outfilename,argv[2]);
-   
+   strcpy(outfilename,argv[2]); 
    infile=fopen(infilename, "rb");
 
    fread(&header, sizeof(drawheader), 1, infile);
