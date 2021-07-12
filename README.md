@@ -14,7 +14,7 @@ Recent additions support transformations and sprite. I stole the sprite code fro
 
 To use:
 
-   draw2svg infile outfile
+```draw2svg infile outfile```
 
 # iwordreader
 Converts BBC Micro Interword files to a sort of XMLy format.
@@ -23,7 +23,7 @@ Due to the way Interword works, there may be multiple \<strong\> or \<em\> tags 
 
 To use:
 
-   iwordreader infile 
+```iwordreader infile```
 
 For some reason it will only output to stdout. Needs lots of work.
 
