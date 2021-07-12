@@ -26,3 +26,7 @@ To use:
    iwordreader infile 
 
 For some reason it will only output to stdout. Needs lots of work.
+
+# Random .md files
+
+These are data format documents I found on my old hard disc, mainly for Archimedes and BBC Micro database files that I reverse engineered back in the day for the Archivist converter.
